@@ -1,5 +1,5 @@
 {
-  "name": "nuvio-providers",
+  "name": "big1-nuvio",
   "version": "1.0.0",
   "scrapers": [
     {
@@ -11,11 +11,10 @@
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/discovery.js",
       "enabled": true,
+      "hasSettings": false,
+      "formats": ["mp4", "mkv", "avi", "mov", "webm"],
       "logo": "",
       "contentLanguage": ["en"],
-      "formats": ["mp4", "mkv", "avi", "mov", "webm"],
-      "limited": false,
-      "disabledPlatforms": [],
       "supportsExternalPlayer": true
     }
   ]

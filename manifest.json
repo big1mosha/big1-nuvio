@@ -1,29 +1,22 @@
-[
-  {
-    "id": "discovery",
-    "name": "Discovery Provider",
-    "description": "A provider to fetch media form discovery ftp",
-    "version": "1.0.0",
-    "author": "Big1Mosha",
-    "supportedTypes": [
-      "movie",
-      "tv"
-    ],
-    "filename": "providers/discovery.js",
-    "enabled": true,
-    "logo": "",
-    "contentLanguage": [
-      "en"
-    ],
-    "formats": [
-      "mp4",
-      "mkv",
-      "avi",
-      ".mov",
-      ".webm"
-    ],
-    "limited": false,
-    "disabledPlatforms": [],
-    "supportsExternalPlayer": true
-  }
-]
+{
+  "name": "nuvio-providers",
+  "version": "1.0.0",
+  "scrapers": [
+    {
+      "id": "discovery",
+      "name": "Discovery Provider",
+      "description": "A provider to fetch media from discovery ftp",
+      "version": "1.0.0",
+      "author": "Big1Mosha",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/discovery.js",
+      "enabled": true,
+      "logo": "",
+      "contentLanguage": ["en"],
+      "formats": ["mp4", "mkv", "avi", "mov", "webm"],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true
+    }
+  ]
+}

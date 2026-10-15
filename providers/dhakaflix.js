@@ -83,6 +83,7 @@ function fetchJson(_0) {
 var import_cheerio_without_node_native = __toESM(require("cheerio-without-node-native"));
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
 var PROVIDER_NAME = "DhakaFlix";
+var MAX_TITLE_VARIANTS = 20;
 var MAX_DEPTH = 3;
 var CATEGORY_FETCH_BUDGET = 16;
 var MAX_CANDIDATES = 4;
@@ -240,11 +241,15 @@ function extractStreams(tmdbId, mediaType = "movie", season, episode) {
 }
 function getTmdbInfo(tmdbId, mediaType = "movie", season, episode) {
   return __async(this, null, function* () {
-    const endpoint = `https://api.themoviedb.org/3/${mediaType}/${tmdbId}?api_key=${TMDB_API_KEY}`;
     try {
-      const data = yield fetchJson(endpoint);
+      const raw = String(tmdbId || "").trim();
+      const data = isImdbId(raw) ? yield resolveByImdb(raw, mediaType) : yield fetchJson(
+        `https://api.themoviedb.org/3/${mediaType}/${raw}?api_key=${TMDB_API_KEY}`
+      );
+      if (!data) return null;
       return {
         title: data.title || data.name || "",
+        altTitles: yield getAlternativeTitles(data.id, mediaType),
         year: (data.release_date || data.first_air_date || data.air_date || "").split("-")[0],
         originalLanguage: data.original_language || "",
         overview: data.overview || ""
@@ -254,15 +259,62 @@ function getTmdbInfo(tmdbId, mediaType = "movie", season, episode) {
     }
   });
 }
+function isImdbId(id) {
+  return /^tt\d+/i.test(id);
+}
+function resolveByImdb(imdbId, mediaType) {
+  return __async(this, null, function* () {
+    const found = yield fetchJson(
+      `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_API_KEY}&external_source=imdb_id`
+    );
+    const primary = mediaType === "tv" ? found.tv_results : found.movie_results;
+    const secondary = mediaType === "tv" ? found.movie_results : found.tv_results;
+    return primary && primary[0] || secondary && secondary[0] || null;
+  });
+}
+function getAlternativeTitles(id, mediaType) {
+  return __async(this, null, function* () {
+    if (!id) return [];
+    try {
+      const data = yield fetchJson(
+        `https://api.themoviedb.org/3/${mediaType}/${id}/alternative_titles?api_key=${TMDB_API_KEY}`
+      );
+      const list = data.titles || data.results || [];
+      return list.map((entry) => entry.title || entry.name || "").filter(Boolean);
+    } catch (error) {
+      return [];
+    }
+  });
+}
+function buildTitleVariants(primary, alternatives) {
+  const seen = /* @__PURE__ */ new Set();
+  const variants = [];
+  for (const title of [primary, ...alternatives || []]) {
+    const clean = String(title || "").trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    variants.push(clean);
+    if (variants.length >= MAX_TITLE_VARIANTS) break;
+  }
+  return variants;
+}
+function buildContext(kind, tmdbInfo, extra = {}) {
+  const titles = buildTitleVariants(tmdbInfo.title, tmdbInfo.altTitles);
+  return __spreadValues({
+    kind,
+    title: tmdbInfo.title,
+    titles,
+    keywordSets: titles.map(getKeywords).filter((words) => words.length),
+    keywords: getKeywords(tmdbInfo.title),
+    year: parseInt(tmdbInfo.year, 10) || null,
+    hint: FOREIGN_LANGUAGE_HINTS[tmdbInfo.originalLanguage] || ""
+  }, extra);
+}
 function extractMovieStreams(tmdbInfo) {
   return __async(this, null, function* () {
-    const ctx = {
-      kind: "movie",
-      title: tmdbInfo.title,
-      keywords: getKeywords(tmdbInfo.title),
-      year: parseInt(tmdbInfo.year, 10) || null,
-      hint: FOREIGN_LANGUAGE_HINTS[tmdbInfo.originalLanguage] || ""
-    };
+    const ctx = buildContext("movie", tmdbInfo);
     const families = buildFamilies(
       MOVIE_CATEGORY_URLS,
       MOVIE_CATEGORY_FAMILIES[tmdbInfo.originalLanguage] || DEFAULT_MOVIE_FAMILIES
@@ -295,16 +347,11 @@ function extractTvStreams(tmdbInfo, seasonNum, episodeNum) {
   return __async(this, null, function* () {
     const sPad = String(seasonNum).padStart(2, "0");
     const ePad = String(episodeNum).padStart(2, "0");
-    const ctx = {
-      kind: "tv",
-      title: tmdbInfo.title,
-      keywords: getKeywords(tmdbInfo.title),
-      year: parseInt(tmdbInfo.year, 10) || null,
-      hint: FOREIGN_LANGUAGE_HINTS[tmdbInfo.originalLanguage] || "",
+    const ctx = buildContext("tv", tmdbInfo, {
       season: seasonNum,
       episode: episodeNum,
       episodeLabel: `S${sPad}E${ePad}`
-    };
+    });
     const families = buildFamilies(
       TV_CATEGORY_URLS,
       TV_CATEGORY_FAMILIES[tmdbInfo.originalLanguage] || DEFAULT_TV_FAMILIES
@@ -402,10 +449,13 @@ function textVariants(row) {
   ];
 }
 function matchesTitle(row, ctx) {
-  if (!ctx.keywords.length) return false;
+  const sets = ctx.keywordSets && ctx.keywordSets.length ? ctx.keywordSets : [ctx.keywords];
+  if (!sets.length) return false;
   const haystacks = textVariants(row);
-  return ctx.keywords.every(
-    (word) => haystacks.some((text) => new RegExp(`\\b${word}\\b`, "i").test(text))
+  return sets.some(
+    (words) => words.every(
+      (word) => haystacks.some((text) => new RegExp(`\\b${word}\\b`, "i").test(text))
+    )
   );
 }
 function pickBestMatch(rows, ctx) {
@@ -618,6 +668,19 @@ function extractVideoStreamsFromRows(rows, baseUrl, displayTitle) {
     (row) => buildStreamObject(row.label, resolveUrl(row, baseUrl), displayTitle)
   );
 }
+var EPISODE_NOISE = [
+  /\[[^\]]*\]/g,
+  /\([^)]*\)/g,
+  /\b\d{3,4}p\b/gi,
+  /\b\d+\.\d+\b/g,
+  /\b(?:x265|x264|h265|h264|hevc|avc|aac|ac3|eac3|ddp\d*|dd\d*|dts|atmos|remux|bluray|brrip|bdrip|web-?dl|webrip|hdrip|hdtv|dsnp|hmax|nf|amzn|esub|esubs|dual|multi|hdhub|msmod)\b/gi
+];
+function denoiseFileName(name) {
+  return EPISODE_NOISE.reduce(
+    (text, pattern) => text.replace(pattern, " "),
+    name
+  );
+}
 function extractEpisodeStreamsFromRows(rows, baseUrl, ctx) {
   const targetSeason = parseInt(ctx.season, 10);
   const targetEpisode = parseInt(ctx.episode, 10);
@@ -631,57 +694,53 @@ function extractEpisodeStreamsFromRows(rows, baseUrl, ctx) {
       sensitivity: "base"
     })
   );
-  const matchingStreams = [];
-  let regexMatched = false;
-  videoFiles.forEach((file, index) => {
-    const name = file.fileName;
-    let isMatch = false;
-    const sRegex = new RegExp(
-      `s0*${targetSeason}[\\s._-]*e0*${targetEpisode}\\b`,
-      "i"
+  if (isNaN(targetSeason) && isNaN(targetEpisode)) {
+    return videoFiles.map(
+      (file) => buildStreamObject(file.fileName, file.url, ctx.title)
     );
-    const eRegex = new RegExp(
-      `\\b(e|ep|episode)[\\s._-]*0*${targetEpisode}\\b`,
-      "i"
-    );
-    const absoluteNum = targetSeason * 100 + targetEpisode;
-    const absRegex = new RegExp(`\\b0*${absoluteNum}\\b`, "i");
-    const bareRegex = new RegExp(
-      `[\\s._-]0*${targetEpisode}(?=[\\s._-]|$)`
-    );
-    if (sRegex.test(name) || eRegex.test(name) || absRegex.test(name) || bareRegex.test(name)) {
-      isMatch = true;
-    } else if (isNaN(targetSeason) && isNaN(targetEpisode)) {
-      isMatch = true;
-    }
-    if (isMatch) {
-      regexMatched = true;
-      matchingStreams.push(
-        buildStreamObject(
-          file.fileName,
-          file.url,
-          episodeTitle(ctx)
-        )
-      );
-    }
-  });
-  if (!regexMatched) {
-    if (videoFiles.length > 1 && videoFiles[targetEpisode - 1]) {
-      const file = videoFiles[targetEpisode - 1];
-      matchingStreams.push(
-        buildStreamObject(file.fileName, file.url, episodeTitle(ctx))
-      );
-    } else if (videoFiles.length === 1) {
-      matchingStreams.push(
-        buildStreamObject(
-          videoFiles[0].fileName,
-          videoFiles[0].url,
-          ctx.title
-        )
-      );
+  }
+  const strongMatches = [];
+  const softMatches = [];
+  const sRegex = new RegExp(
+    `s0*${targetSeason}[\\s._-]*e0*${targetEpisode}\\b`,
+    "i"
+  );
+  const xRegex = new RegExp(`\\b${targetSeason}x0*${targetEpisode}\\b`, "i");
+  const eRegex = new RegExp(
+    `\\b(e|ep|episode)[\\s._-]*0*${targetEpisode}\\b`,
+    "i"
+  );
+  const absoluteNum = targetSeason * 100 + targetEpisode;
+  const absRegex = new RegExp(`\\b0*${absoluteNum}\\b`, "i");
+  const bareRegex = new RegExp(`(^|[\\s._-])0*${targetEpisode}(?=[\\s._-]|$)`);
+  for (const file of videoFiles) {
+    const clean = denoiseFileName(file.fileName);
+    if (sRegex.test(clean) || xRegex.test(clean) || eRegex.test(clean)) {
+      strongMatches.push(file);
+    } else if (absRegex.test(clean) || bareRegex.test(clean)) {
+      softMatches.push(file);
     }
   }
-  return matchingStreams;
+  const matched = strongMatches.length ? strongMatches : softMatches;
+  if (matched.length) {
+    return matched.map(
+      (file) => buildStreamObject(file.fileName, file.url, episodeTitle(ctx))
+    );
+  }
+  if (videoFiles.length > 1 && videoFiles[targetEpisode - 1]) {
+    const file = videoFiles[targetEpisode - 1];
+    return [buildStreamObject(file.fileName, file.url, episodeTitle(ctx))];
+  }
+  if (videoFiles.length === 1) {
+    return [
+      buildStreamObject(
+        videoFiles[0].fileName,
+        videoFiles[0].url,
+        ctx.title
+      )
+    ];
+  }
+  return [];
 }
 function episodeTitle(ctx) {
   return ctx.episodeLabel ? `${ctx.title} ${ctx.episodeLabel}` : ctx.title;

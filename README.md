@@ -7,6 +7,7 @@ Nuvio provider repository.
 | ID | Name | Types |
 | --- | --- | --- |
 | `discovery` | Discovery Provider | movie, tv |
+| `dhakaflix` | DhakaFlix Provider | movie, tv |
 
 ## Install
 

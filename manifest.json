@@ -16,6 +16,21 @@
       "logo": "",
       "contentLanguage": ["en"],
       "supportsExternalPlayer": true
+    },
+    {
+      "id": "dhakaflix",
+      "name": "DhakaFlix Provider",
+      "description": "A provider to fetch media from the DhakaFlix LAN servers",
+      "version": "1.0.0",
+      "author": "Big1Mosha",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/dhakaflix.js",
+      "enabled": true,
+      "hasSettings": false,
+      "formats": ["mp4", "mkv", "avi", "mov", "webm"],
+      "logo": "",
+      "contentLanguage": ["en"],
+      "supportsExternalPlayer": true
     }
   ]
 }

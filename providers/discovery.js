@@ -82,6 +82,7 @@ function fetchJson(_0) {
 // src/discovery/extractor.js
 var import_cheerio_without_node_native = __toESM(require("cheerio-without-node-native"));
 var TMDB_API_KEY = "439c478a771f35c05022f9feabcca01c";
+var MAX_TITLE_VARIANTS = 20;
 var MOVIE_CATEGORY_URLS = {
   English: "https://cdn4.discoveryftp.net/Movies/English/",
   Animation: "https://cdn1.discoveryftp.net/Movies/Animation/",
@@ -127,11 +128,15 @@ function extractStreams(tmdbId, mediaType = "movie", season, episode) {
 }
 function getTmdbInfo(tmdbId, mediaType = "movie", season, episode) {
   return __async(this, null, function* () {
-    const endpoint = `https://api.themoviedb.org/3/${mediaType}/${tmdbId}?api_key=${TMDB_API_KEY}`;
     try {
-      const data = yield fetchJson(endpoint);
+      const raw = String(tmdbId || "").trim();
+      const data = isImdbId(raw) ? yield resolveByImdb(raw, mediaType) : yield fetchJson(
+        `https://api.themoviedb.org/3/${mediaType}/${raw}?api_key=${TMDB_API_KEY}`
+      );
+      if (!data) return null;
       return {
         title: data.title || data.name || "",
+        altTitles: yield getAlternativeTitles(data.id, mediaType),
         year: (data.release_date || data.first_air_date || data.air_date || "").split("-")[0],
         originalLanguage: data.original_language || "",
         overview: data.overview || ""
@@ -141,9 +146,51 @@ function getTmdbInfo(tmdbId, mediaType = "movie", season, episode) {
     }
   });
 }
+function isImdbId(id) {
+  return /^tt\d+/i.test(id);
+}
+function resolveByImdb(imdbId, mediaType) {
+  return __async(this, null, function* () {
+    const found = yield fetchJson(
+      `https://api.themoviedb.org/3/find/${imdbId}?api_key=${TMDB_API_KEY}&external_source=imdb_id`
+    );
+    const primary = mediaType === "tv" ? found.tv_results : found.movie_results;
+    const secondary = mediaType === "tv" ? found.movie_results : found.tv_results;
+    return primary && primary[0] || secondary && secondary[0] || null;
+  });
+}
+function getAlternativeTitles(id, mediaType) {
+  return __async(this, null, function* () {
+    if (!id) return [];
+    try {
+      const data = yield fetchJson(
+        `https://api.themoviedb.org/3/${mediaType}/${id}/alternative_titles?api_key=${TMDB_API_KEY}`
+      );
+      const list = data.titles || data.results || [];
+      return list.map((entry) => entry.title || entry.name || "").filter(Boolean);
+    } catch (error) {
+      return [];
+    }
+  });
+}
+function getKeywordSets(tmdbInfo) {
+  const seen = /* @__PURE__ */ new Set();
+  const sets = [];
+  for (const title of [tmdbInfo.title, ...tmdbInfo.altTitles || []]) {
+    const clean = String(title || "").trim();
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const words = getKeywords(clean);
+    if (words.length) sets.push(words);
+    if (sets.length >= MAX_TITLE_VARIANTS) break;
+  }
+  return sets;
+}
 function extractMovieStreams(tmdbInfo) {
   return __async(this, null, function* () {
-    const titleKeywords = getKeywords(tmdbInfo.title);
+    const titleKeywords = getKeywordSets(tmdbInfo);
     let targetYear = parseInt(tmdbInfo.year, 10);
     if (isNaN(targetYear) || targetYear <= 2e3) {
       targetYear = "2000";
@@ -182,7 +229,7 @@ function extractMovieStreams(tmdbInfo) {
 }
 function extractTvStreams(tmdbInfo, seasonNum, episodeNum) {
   return __async(this, null, function* () {
-    const titleKeywords = getKeywords(tmdbInfo.title);
+    const titleKeywords = getKeywordSets(tmdbInfo);
     const searchOrder = getTvCategorySearchOrder(tmdbInfo.originalLanguage);
     const allStreams = [];
     const sPad = String(seasonNum).padStart(2, "0");
@@ -317,8 +364,10 @@ function extractEpisodeStreams(html, baseUrl, seasonNum, episodeNum, displayTitl
 function getKeywords(title) {
   return title.toLowerCase().replace(/[^a-z0-9\s]/g, "").split(/\s+/).filter(Boolean);
 }
-function findMatchingFolder(html, titleKeywords) {
+function findMatchingFolder(html, keywordSets) {
+  if (!keywordSets || !keywordSets.length) return null;
   const $ = import_cheerio_without_node_native.default.load(html);
+  const sets = Array.isArray(keywordSets[0]) ? keywordSets : [keywordSets];
   let matchedPath = null;
   $("tr").each((_, el) => {
     const row = $(el);
@@ -328,10 +377,12 @@ function findMatchingFolder(html, titleKeywords) {
     const decodedHref = decodeURIComponent(href).toLowerCase();
     const linkText = linkEl.text().toLowerCase();
     const fullContent = `${decodedHref} ${linkText}`;
-    const matchesAll = titleKeywords.every((word) => {
-      const regex = new RegExp(`\\b${word}\\b`, "i");
-      return regex.test(fullContent);
-    });
+    const matchesAll = sets.some(
+      (words) => words.every((word) => {
+        const regex = new RegExp(`\\b${word}\\b`, "i");
+        return regex.test(fullContent);
+      })
+    );
     if (matchesAll) {
       matchedPath = href;
       return false;
